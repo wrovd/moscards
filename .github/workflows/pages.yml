@@ -21,10 +21,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
-      - run: npm install
-      - run: npm run build
+      - name: Install deps
+        run: npm install
+
+      - name: Build
+        run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
