@@ -1,5 +1,6 @@
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
+import { normalizeTable } from "./normalize";
 
 export type ParsedTable = {
   headers: string[];
@@ -17,6 +18,7 @@ function ensureHeaders(headers: string[]) {
 export async function parseFile(file: File): Promise<ParsedTable> {
   const ext = (file.name.split(".").pop() || "").toLowerCase();
 
+  // --- CSV ---
   if (ext === "csv") {
     const text = await file.text();
 
@@ -36,9 +38,11 @@ export async function parseFile(file: File): Promise<ParsedTable> {
       return r;
     });
 
-    return { headers, rows: rows.length ? rows : [] };
+    const table: ParsedTable = { headers, rows: rows.length ? rows : [] };
+    return normalizeTable(table);
   }
 
+  // --- XLSX ---
   if (ext === "xlsx") {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
@@ -46,6 +50,9 @@ export async function parseFile(file: File): Promise<ParsedTable> {
     if (!sheetName) throw new Error("XLSX пустой: нет листов");
 
     const sheet = wb.Sheets[sheetName];
+
+    // sheet_to_json берёт первую строку как заголовки, но WB часто имеет группы/подсказки,
+    // поэтому мы нормализуем результат ниже.
     const json = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
 
     const headersRaw = Object.keys(json[0] || {});
@@ -57,7 +64,8 @@ export async function parseFile(file: File): Promise<ParsedTable> {
       return r;
     });
 
-    return { headers, rows: rows.length ? rows : [] };
+    const table: ParsedTable = { headers, rows: rows.length ? rows : [] };
+    return normalizeTable(table);
   }
 
   throw new Error("Неподдерживаемый формат. Загрузите CSV или XLSX.");
