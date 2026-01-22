@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { ParsedTable, parseFileSmart, readXlsxMatrix, matrixToTable, guessHeaderRowIndex, XlsxMeta } from "../importer";
+import { ParsedTable, parseFileSmart, XlsxMeta } from "../importer";
 
 type Mode = "single" | "bulk" | "replace" | null;
 
@@ -10,11 +10,7 @@ export default function App() {
   const [fileName, setFileName] = useState<string>("");
   const [err, setErr] = useState<string>("");
 
-  // XLSX controls
   const [xlsxMeta, setXlsxMeta] = useState<XlsxMeta | null>(null);
-  const [xlsxMatrix, setXlsxMatrix] = useState<any[][] | null>(null);
-  const [sheetIndex, setSheetIndex] = useState<number>(0);
-  const [headerRowIndex, setHeaderRowIndex] = useState<number>(0);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<File | null>(null);
@@ -35,9 +31,6 @@ export default function App() {
     setFileName("");
     setErr("");
     setXlsxMeta(null);
-    setXlsxMatrix(null);
-    setSheetIndex(0);
-    setHeaderRowIndex(0);
     fileRef.current = null;
   }
 
@@ -50,55 +43,20 @@ export default function App() {
     try {
       const res = await parseFileSmart(file);
       setTable(res.table);
-
-      // если XLSX — включаем управление листом/строкой заголовков
-      if (res.meta && res.matrix != null) {
-        setXlsxMeta(res.meta);
-        setXlsxMatrix(res.matrix);
-        setSheetIndex(res.sheetIndex ?? 0);
-        setHeaderRowIndex(res.headerRowIndex ?? 0);
-      }
+      if (res.meta) setXlsxMeta(res.meta);
     } catch (e: any) {
       setErr(e?.message || "Ошибка импорта");
     }
   }
 
-  async function changeSheet(nextSheetIndex: number) {
-    try {
-      setErr("");
-      setTable(null);
-      setSheetIndex(nextSheetIndex);
-
-      const f = fileRef.current;
-      if (!f) return;
-
-      const matrix = await readXlsxMatrix(f, nextSheetIndex);
-      setXlsxMatrix(matrix);
-
-      const guessed = guessHeaderRowIndex(matrix);
-      setHeaderRowIndex(guessed);
-
-      const t = matrixToTable(matrix, guessed);
-      setTable(t);
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка чтения листа");
-    }
+  function updateCell(header: string, value: string) {
+    if (!table) return;
+    const rows = [...table.rows];
+    rows[0] = { ...rows[0], [header]: value };
+    setTable({ headers: table.headers, rows });
   }
 
-  function changeHeaderRow(nextHeaderRowIndex: number) {
-    try {
-      setErr("");
-      setHeaderRowIndex(nextHeaderRowIndex);
-
-      if (!xlsxMatrix) return;
-      const t = matrixToTable(xlsxMatrix, nextHeaderRowIndex);
-      setTable(t);
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка выбора строки заголовков");
-    }
-  }
-
-  // Screen 1: mode select
+  // -------- Screen 1: mode select --------
   if (!mode) {
     return (
       <div style={styles.page}>
@@ -125,7 +83,7 @@ export default function App() {
     );
   }
 
-  // Screen 2: import + preview
+  // -------- Screen 2: import + edit --------
   return (
     <div style={styles.page}>
       <button
@@ -139,9 +97,6 @@ export default function App() {
       </button>
 
       <h2 style={{ marginTop: 0 }}>{title}</h2>
-      <p style={styles.subtitle}>
-        Загрузите шаблон <b>CSV</b> или <b>XLSX</b>. Для XLSX можно выбрать лист и строку заголовков.
-      </p>
 
       <div style={styles.actions}>
         <button style={styles.primary} onClick={openPicker}>
@@ -167,216 +122,94 @@ export default function App() {
         />
       </div>
 
-      {/* XLSX controls */}
-      {xlsxMeta && xlsxMatrix ? (
-        <div style={styles.controls}>
-          <div style={styles.controlItem}>
-            <div style={styles.controlLabel}>Лист</div>
-            <select
-              value={sheetIndex}
-              onChange={(e) => changeSheet(Number(e.target.value))}
-              style={styles.select}
-            >
-              {xlsxMeta.sheetNames.map((name, idx) => (
-                <option value={idx} key={name + idx}>
-                  {idx + 1}. {name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={styles.controlItem}>
-            <div style={styles.controlLabel}>Строка заголовков</div>
-            <select
-              value={headerRowIndex}
-              onChange={(e) => changeHeaderRow(Number(e.target.value))}
-              style={styles.select}
-            >
-              {Array.from({ length: Math.min(30, xlsxMatrix.length) }).map((_, i) => (
-                <option value={i} key={i}>
-                  {i + 1}
-                </option>
-              ))}
-            </select>
-            <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
-              Если видишь “товар” в заголовках — переключи строку заголовков выше/ниже.
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {err ? (
         <div style={styles.errorBox}>
           <b>Ошибка:</b> {err}
         </div>
       ) : null}
 
-      {table ? (
-        <Preview headers={table.headers} rows={table.rows} />
+      {table && table.rows.length > 0 ? (
+        <div style={styles.split}>
+          {/* LEFT: form */}
+          <div style={styles.form}>
+            <h3 style={{ marginTop: 0 }}>Поля товара</h3>
+
+            {table.headers.map((h) => (
+              <div key={h} style={styles.field}>
+                <label style={styles.label}>{h}</label>
+                <input
+                  style={styles.input}
+                  value={table.rows[0]?.[h] ?? ""}
+                  onChange={(e) => updateCell(h, e.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* RIGHT: preview */}
+          <div style={styles.preview}>
+            <h3 style={{ marginTop: 0 }}>Предпросмотр</h3>
+            <Table headers={table.headers} rows={table.rows} />
+          </div>
+        </div>
       ) : (
         <div style={styles.hintBox}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Подсказка</div>
-          <div style={{ color: "#555", fontSize: 14, lineHeight: 1.5 }}>
-            • CSV: первая строка — заголовки колонок.<br />
-            • XLSX: можно выбрать лист и строку заголовков.<br />
-            • Дальше добавим редактор и экспорт.
-          </div>
+          Загрузите файл, чтобы начать редактирование товара.
         </div>
       )}
     </div>
   );
 }
 
-function Preview({ headers, rows }: { headers: string[]; rows: Record<string, string>[] }) {
-  const previewRows = rows.slice(0, 10);
+function Table({ headers, rows }: { headers: string[]; rows: Record<string, string>[] }) {
+  const previewRows = rows.slice(0, 5);
 
   return (
-    <div style={{ marginTop: 18 }}>
-      <div style={{ display: "flex", gap: 12, alignItems: "baseline", marginBottom: 10 }}>
-        <div style={{ fontWeight: 700 }}>Колонки: {headers.length}</div>
-        <div style={{ color: "#666", fontSize: 14 }}>Строк: {rows.length}</div>
-      </div>
-
-      <div style={styles.tableWrap}>
-        <table style={styles.table}>
-          <thead>
-            <tr>
+    <div style={styles.tableWrap}>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            {headers.map((h) => (
+              <th key={h} style={styles.th}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {previewRows.map((r, i) => (
+            <tr key={i}>
               {headers.map((h) => (
-                <th key={h} style={styles.th} title={h}>
-                  {h}
-                </th>
+                <td key={h} style={styles.td}>
+                  {r[h] ?? ""}
+                </td>
               ))}
             </tr>
-          </thead>
-          <tbody>
-            {previewRows.map((r, i) => (
-              <tr key={i}>
-                {headers.map((h) => (
-                  <td key={h} style={styles.td}>
-                    {r[h] ?? ""}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {rows.length > 10 ? (
-        <div style={{ marginTop: 8, color: "#666", fontSize: 13 }}>
-          Показаны первые 10 строк.
-        </div>
-      ) : null}
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  page: {
-    padding: 40,
-    fontFamily: "system-ui, sans-serif"
-  },
-  subtitle: {
-    color: "#555",
-    marginBottom: 18,
-    lineHeight: 1.5
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-    gap: 16
-  },
-  card: {
-    padding: 24,
-    borderRadius: 12,
-    border: "1px solid #ddd",
-    cursor: "pointer",
-    background: "#fff",
-    textAlign: "left"
-  },
-  back: {
-    marginBottom: 16
-  },
-  actions: {
-    display: "flex",
-    gap: 12,
-    alignItems: "center",
-    flexWrap: "wrap"
-  },
-  primary: {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "1px solid #111",
-    background: "#111",
-    color: "#fff",
-    cursor: "pointer"
-  },
-  controls: {
-    marginTop: 14,
-    display: "flex",
-    gap: 14,
-    flexWrap: "wrap",
-    alignItems: "flex-start"
-  },
-  controlItem: {
-    border: "1px solid #e5e5e5",
-    borderRadius: 12,
-    padding: 12,
-    background: "#fff",
-    minWidth: 280
-  },
-  controlLabel: {
-    fontSize: 12,
-    color: "#666",
-    marginBottom: 6
-  },
-  select: {
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid #ddd",
-    width: "100%"
-  },
-  hintBox: {
-    marginTop: 18,
-    borderRadius: 12,
-    border: "1px solid #e5e5e5",
-    padding: 16,
-    background: "#fff"
-  },
-  errorBox: {
-    marginTop: 14,
-    borderRadius: 12,
-    border: "1px solid #ffb4b4",
-    padding: 14,
-    background: "#fff5f5",
-    color: "#7a1b1b"
-  },
-  tableWrap: {
-    border: "1px solid #e5e5e5",
-    borderRadius: 12,
-    overflow: "auto",
-    background: "#fff"
-  },
-  table: {
-    borderCollapse: "separate",
-    borderSpacing: 0,
-    minWidth: 900,
-    width: "100%"
-  },
-  th: {
-    position: "sticky",
-    top: 0,
-    background: "#fafafa",
-    borderBottom: "1px solid #e5e5e5",
-    padding: "10px 12px",
-    fontSize: 13,
-    textAlign: "left",
-    whiteSpace: "nowrap"
-  },
-  td: {
-    borderBottom: "1px solid #f0f0f0",
-    padding: "10px 12px",
-    fontSize: 13,
-    whiteSpace: "nowrap"
-  }
+  page: { padding: 40, fontFamily: "system-ui, sans-serif" },
+  subtitle: { color: "#555", marginBottom: 24 },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px,1fr))", gap: 16 },
+  card: { padding: 24, borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer", textAlign: "left" },
+  back: { marginBottom: 16 },
+  actions: { display: "flex", gap: 12, alignItems: "center", marginBottom: 16 },
+  primary: { padding: "10px 14px", borderRadius: 10, background: "#111", color: "#fff", border: "none", cursor: "pointer" },
+  errorBox: { marginTop: 12, padding: 12, borderRadius: 10, background: "#fff5f5", border: "1px solid #ffb4b4" },
+  split: { display: "grid", gridTemplateColumns: "420px 1fr", gap: 24, marginTop: 24 },
+  form: { border: "1px solid #e5e5e5", borderRadius: 12, padding: 16, background: "#fff", maxHeight: "75vh", overflow: "auto" },
+  field: { marginBottom: 12 },
+  label: { display: "block", fontSize: 12, color: "#555", marginBottom: 4 },
+  input: { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #ddd" },
+  preview: { border: "1px solid #e5e5e5", borderRadius: 12, padding: 16, background: "#fff" },
+  tableWrap: { overflow: "auto", border: "1px solid #eee", borderRadius: 8 },
+  table: { width: "100%", borderCollapse: "collapse" },
+  th: { textAlign: "left", fontSize: 12, padding: 8, borderBottom: "1px solid #eee", background: "#fafafa" },
+  td: { fontSize: 12, padding: 8, borderBottom: "1px solid #f0f0f0" },
+  hintBox: { marginTop: 24, padding: 16, borderRadius: 12, border: "1px dashed #ddd", color: "#555" }
 };
