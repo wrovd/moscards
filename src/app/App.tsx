@@ -1,15 +1,23 @@
 import { useMemo, useRef, useState } from "react";
-import { parseFile, ParsedTable } from "../importer";
+import { ParsedTable, parseFileSmart, readXlsxMatrix, matrixToTable, guessHeaderRowIndex, XlsxMeta } from "../importer";
 
 type Mode = "single" | "bulk" | "replace" | null;
 
 export default function App() {
   const [mode, setMode] = useState<Mode>(null);
+
   const [table, setTable] = useState<ParsedTable | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [err, setErr] = useState<string>("");
 
+  // XLSX controls
+  const [xlsxMeta, setXlsxMeta] = useState<XlsxMeta | null>(null);
+  const [xlsxMatrix, setXlsxMatrix] = useState<any[][] | null>(null);
+  const [sheetIndex, setSheetIndex] = useState<number>(0);
+  const [headerRowIndex, setHeaderRowIndex] = useState<number>(0);
+
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileRef = useRef<File | null>(null);
 
   const title = useMemo(() => {
     if (!mode) return "MosCards";
@@ -17,19 +25,6 @@ export default function App() {
     if (mode === "bulk") return "Много товаров";
     return "Изменить модель";
   }, [mode]);
-
-  async function onPickFile(file: File) {
-    setErr("");
-    setTable(null);
-    setFileName(file.name);
-
-    try {
-      const res = await parseFile(file);
-      setTable(res);
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка импорта");
-    }
-  }
 
   function openPicker() {
     inputRef.current?.click();
@@ -39,9 +34,71 @@ export default function App() {
     setTable(null);
     setFileName("");
     setErr("");
+    setXlsxMeta(null);
+    setXlsxMatrix(null);
+    setSheetIndex(0);
+    setHeaderRowIndex(0);
+    fileRef.current = null;
   }
 
-  // SCREEN 1: mode select
+  async function onPickFile(file: File) {
+    setErr("");
+    resetToMode();
+    setFileName(file.name);
+    fileRef.current = file;
+
+    try {
+      const res = await parseFileSmart(file);
+      setTable(res.table);
+
+      // если XLSX — включаем управление листом/строкой заголовков
+      if (res.meta && res.matrix != null) {
+        setXlsxMeta(res.meta);
+        setXlsxMatrix(res.matrix);
+        setSheetIndex(res.sheetIndex ?? 0);
+        setHeaderRowIndex(res.headerRowIndex ?? 0);
+      }
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка импорта");
+    }
+  }
+
+  async function changeSheet(nextSheetIndex: number) {
+    try {
+      setErr("");
+      setTable(null);
+      setSheetIndex(nextSheetIndex);
+
+      const f = fileRef.current;
+      if (!f) return;
+
+      const matrix = await readXlsxMatrix(f, nextSheetIndex);
+      setXlsxMatrix(matrix);
+
+      const guessed = guessHeaderRowIndex(matrix);
+      setHeaderRowIndex(guessed);
+
+      const t = matrixToTable(matrix, guessed);
+      setTable(t);
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка чтения листа");
+    }
+  }
+
+  function changeHeaderRow(nextHeaderRowIndex: number) {
+    try {
+      setErr("");
+      setHeaderRowIndex(nextHeaderRowIndex);
+
+      if (!xlsxMatrix) return;
+      const t = matrixToTable(xlsxMatrix, nextHeaderRowIndex);
+      setTable(t);
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка выбора строки заголовков");
+    }
+  }
+
+  // Screen 1: mode select
   if (!mode) {
     return (
       <div style={styles.page}>
@@ -68,12 +125,12 @@ export default function App() {
     );
   }
 
-  // SCREEN 2: import + preview
+  // Screen 2: import + preview
   return (
     <div style={styles.page}>
       <button
         onClick={() => {
-          if (table) resetToMode();
+          if (table || fileName) resetToMode();
           else setMode(null);
         }}
         style={styles.back}
@@ -83,7 +140,7 @@ export default function App() {
 
       <h2 style={{ marginTop: 0 }}>{title}</h2>
       <p style={styles.subtitle}>
-        Загрузите шаблон <b>CSV</b> или <b>XLSX</b>. Мы покажем колонки и предпросмотр.
+        Загрузите шаблон <b>CSV</b> или <b>XLSX</b>. Для XLSX можно выбрать лист и строку заголовков.
       </p>
 
       <div style={styles.actions}>
@@ -105,11 +162,48 @@ export default function App() {
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) onPickFile(f);
-            // сброс input чтобы можно было выбрать тот же файл ещё раз
             if (inputRef.current) inputRef.current.value = "";
           }}
         />
       </div>
+
+      {/* XLSX controls */}
+      {xlsxMeta && xlsxMatrix ? (
+        <div style={styles.controls}>
+          <div style={styles.controlItem}>
+            <div style={styles.controlLabel}>Лист</div>
+            <select
+              value={sheetIndex}
+              onChange={(e) => changeSheet(Number(e.target.value))}
+              style={styles.select}
+            >
+              {xlsxMeta.sheetNames.map((name, idx) => (
+                <option value={idx} key={name + idx}>
+                  {idx + 1}. {name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={styles.controlItem}>
+            <div style={styles.controlLabel}>Строка заголовков</div>
+            <select
+              value={headerRowIndex}
+              onChange={(e) => changeHeaderRow(Number(e.target.value))}
+              style={styles.select}
+            >
+              {Array.from({ length: Math.min(30, xlsxMatrix.length) }).map((_, i) => (
+                <option value={i} key={i}>
+                  {i + 1}
+                </option>
+              ))}
+            </select>
+            <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
+              Если видишь “товар” в заголовках — переключи строку заголовков выше/ниже.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {err ? (
         <div style={styles.errorBox}>
@@ -123,9 +217,9 @@ export default function App() {
         <div style={styles.hintBox}>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Подсказка</div>
           <div style={{ color: "#555", fontSize: 14, lineHeight: 1.5 }}>
-            • В CSV первая строка должна быть заголовками колонок.<br />
-            • XLSX берём первый лист.<br />
-            • Пока это предпросмотр — дальше добавим редактор и экспорт.
+            • CSV: первая строка — заголовки колонок.<br />
+            • XLSX: можно выбрать лист и строку заголовков.<br />
+            • Дальше добавим редактор и экспорт.
           </div>
         </div>
       )}
@@ -216,6 +310,31 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#111",
     color: "#fff",
     cursor: "pointer"
+  },
+  controls: {
+    marginTop: 14,
+    display: "flex",
+    gap: 14,
+    flexWrap: "wrap",
+    alignItems: "flex-start"
+  },
+  controlItem: {
+    border: "1px solid #e5e5e5",
+    borderRadius: 12,
+    padding: 12,
+    background: "#fff",
+    minWidth: 280
+  },
+  controlLabel: {
+    fontSize: 12,
+    color: "#666",
+    marginBottom: 6
+  },
+  select: {
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #ddd",
+    width: "100%"
   },
   hintBox: {
     marginTop: 18,
